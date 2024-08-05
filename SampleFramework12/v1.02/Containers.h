@@ -46,6 +46,7 @@ public:
 
     void Init(uint64 numElements)
     {
+        // 如果已经创建过，先释放
         Shutdown();
 
         size = numElements;

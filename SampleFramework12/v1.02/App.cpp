@@ -56,7 +56,7 @@ int32 App::Run()
 {
     try
     {
-
+        // 初始化
         Initialize_Internal();
 
         AfterReset_Internal();
@@ -169,6 +169,7 @@ void App::ParseCommandLine(const wchar* cmdLine)
 
 void App::Initialize_Internal()
 {
+    // DX12 初始化
     DX12::Initialize(minFeatureLevel, adapterIdx);
 
     window.SetClientArea(swapChain.Width(), swapChain.Height());

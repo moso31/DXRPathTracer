@@ -83,6 +83,8 @@ static Fence convertFence;
 
 void Initialize_Helpers()
 {
+    // 初始化各种堆
+    // 初始化一大堆全局参数和资产（全局参数、RS、BS、DSS、……）
     RTVDescriptorHeap.Init(256, 0, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, false);
     SRVDescriptorHeap.Init(4096, 4096, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true);
     DSVDescriptorHeap.Init(256, 0, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, false);

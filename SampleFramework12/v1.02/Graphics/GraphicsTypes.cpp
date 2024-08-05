@@ -25,26 +25,32 @@ DescriptorHeap::~DescriptorHeap()
     Assert_(Heaps[0] == nullptr);
 }
 
+// numPersistent：持续内存
+// numTemporary：临时内存
 void DescriptorHeap::Init(uint32 numPersistent, uint32 numTemporary, D3D12_DESCRIPTOR_HEAP_TYPE heapType, bool shaderVisible)
 {
-    Shutdown();
+    Shutdown(); // 如果有资源先释放
 
+    // 持续+临时的内存总量
     uint32 totalNumDescriptors = numPersistent + numTemporary;
     Assert_(totalNumDescriptors > 0);
 
     NumPersistent = numPersistent;
     NumTemporary = numTemporary;
     HeapType = heapType;
-    ShaderVisible = shaderVisible;
+    ShaderVisible = shaderVisible; 
     if(heapType == D3D12_DESCRIPTOR_HEAP_TYPE_RTV || heapType == D3D12_DESCRIPTOR_HEAP_TYPE_DSV)
         ShaderVisible = false;
 
-    NumHeaps = ShaderVisible ? 2 : 1;
+    NumHeaps = ShaderVisible ? 2 : 1; // 如果是可见堆，做两个；否则只做一个
 
+    // 将持续内存的索引放入死亡列表
+    // 死亡列表：负责记录"未使用的索引"。默认i=i，但实际使用时不总是这样，见.h中注释
     DeadList.Init(numPersistent);
     for(uint32 i = 0; i < numPersistent; ++i)
         DeadList[i] = uint32(i);
 
+    // 堆描述
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc = { };
     heapDesc.NumDescriptors = uint32(totalNumDescriptors);
     heapDesc.Type = heapType;
@@ -52,6 +58,7 @@ void DescriptorHeap::Init(uint32 numPersistent, uint32 numTemporary, D3D12_DESCR
     if(ShaderVisible)
         heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 
+    // 创建描述符堆的实体
     for(uint32 i = 0; i < NumHeaps; ++i)
     {
         DXCall(DX12::Device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&Heaps[i])));
@@ -72,16 +79,20 @@ void DescriptorHeap::Shutdown()
 
 PersistentDescriptorAlloc DescriptorHeap::AllocatePersistent()
 {
+    // 分配连续区域的内存
     Assert_(Heaps[0] != nullptr);
 
+    // 锁。Acquire - Release 之间的代码是原子操作
     AcquireSRWLockExclusive(&Lock);
 
+    // 1. 从死亡列表中取出一个索引...
     Assert_(PersistentAllocated < NumPersistent);
     uint32 idx = DeadList[PersistentAllocated];
     ++PersistentAllocated;
 
     ReleaseSRWLockExclusive(&Lock);
-
+    
+    // 2. ...并在该索引上分配内存
     PersistentDescriptorAlloc alloc;
     alloc.Index = idx;
     for(uint32 i = 0; i < NumHeaps; ++i)
@@ -95,6 +106,7 @@ PersistentDescriptorAlloc DescriptorHeap::AllocatePersistent()
 
 void DescriptorHeap::FreePersistent(uint32& idx)
 {
+    // 释放连续区域的内存
     if(idx == uint32(-1))
         return;
 
@@ -136,14 +148,23 @@ void DescriptorHeap::FreePersistent(D3D12_GPU_DESCRIPTOR_HANDLE& handle)
 
 TempDescriptorAlloc DescriptorHeap::AllocateTemporary(uint32 count)
 {
+    // 分配临时区域的内存
     Assert_(Heaps[0] != nullptr);
     Assert_(count > 0);
 
+    // 原子操作，获取临时内存的索引
+    // 本质相当于 
+    //  {
+    //      tempIdx = TemporaryAllocated; 
+    //      TemporaryAllocated += count;
+    //  }
     uint32 tempIdx = uint32(InterlockedAdd64(&TemporaryAllocated, count)) - count;
     Assert_(tempIdx < NumTemporary);
 
+    // 连续区域内存最大数量+tempIdx = 当前索引
     uint32 finalIdx = tempIdx + NumPersistent;
 
+    // 临时内存的职责是，存储当前帧使用的ShaderVisible的Heap的CPUHandle和GPUHandle
     TempDescriptorAlloc alloc;
     alloc.StartCPUHandle = CPUStart[HeapIndex];
     alloc.StartCPUHandle.ptr += finalIdx * DescriptorSize;
