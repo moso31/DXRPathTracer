@@ -29,21 +29,25 @@ namespace SampleFramework12
 			uint64 FenceValue = 0;
 			uint64 WaitCount = 0;
 
+			// 每个命令队列都是单线程的，用锁保护起来
 			SRWLOCK Lock = SRWLOCK_INIT;
 
 			void Init(const wchar* name)
 			{
+				// 初始化命令队列...
 				D3D12_COMMAND_QUEUE_DESC queueDesc = { };
 				queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
 				queueDesc.Type = D3D12_COMMAND_LIST_TYPE_COPY;
 				DXCall(Device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&CmdQueue)));
 				CmdQueue->SetName(name);
 
+				// ...和围栏
 				Fence.Init(0);
 			}
 
 			void Shutdown()
 			{
+				// 不在需要队列的时候，应该将围栏和资源都释放掉
 				Fence.Shutdown();
 				Release(CmdQueue);
 			}
@@ -52,10 +56,15 @@ namespace SampleFramework12
 			{
 				AcquireSRWLockExclusive(&Lock);
 
-				// 告知一个指定的命令队列，你先挂起，等我（当前队列）的Fence执行完再继续后续内容
 				if (WaitCount > 0)
 				{
-					// Tell the other queue to wait for any pending uploads to finish before running
+					// 告知一个指定的命令队列，你先挂起，等我（当前队列）执行完再继续后续内容
+
+					// 注：为什么这段代码能表示"当前队列执行完"：
+					// 按官方文档对Wait()的解释（https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12commandqueue-wait），
+					// otherQueue 会立即进入等待，并且不执行任何工作。
+					// 当 Fence 在 GPU中的实际 GetCompletedValue() >= X 时，otherQueue 才会继续执行。
+					// 那什么时候才会有 GetCompletedValue() >= X 呢？就是当前队列，this，在GPU上响应上一帧的Fence.Signal()的时候。
 					otherQueue->Wait(Fence.D3DFence, FenceValue);
 
 					WaitCount = 0;
@@ -66,6 +75,7 @@ namespace SampleFramework12
 
 			uint64 SubmitCmdList(ID3D12GraphicsCommandList* cmdList, bool syncOnDependentQueue)
 			{
+				// 提交命令队列，并且围栏标记+1
 				AcquireSRWLockExclusive(&Lock);
 
 				ID3D12CommandList* cmdLists[1] = { cmdList };
@@ -74,6 +84,8 @@ namespace SampleFramework12
 				const uint64 newFenceValue = ++FenceValue;
 				Fence.Signal(CmdQueue, newFenceValue);
 
+				// WaitCount的意思是做等待标记
+				// 这样一旦调用SyncDependentQueue()，其他队列就会立即挂起，等待当前队列执行完
 				if (syncOnDependentQueue)
 					WaitCount += 1;
 
@@ -84,6 +96,7 @@ namespace SampleFramework12
 
 			void Flush()
 			{
+				// 自等待，在当前队列执行完之前，自己挂起。
 				AcquireSRWLockExclusive(&Lock);
 
 				// Wait for all pending submissions on the queue to finish
