@@ -131,12 +131,12 @@ namespace SampleFramework12
 			static const uint64 MaxSubmissions = 16;
 			UploadSubmission Submissions[MaxSubmissions];
 			uint64 SubmissionStart = 0;
-			uint64 SubmissionUsed = 0;
+			uint64 SubmissionUsed = 0; // 已经使用的submission数量
 
 			// CPU-writable UPLOAD buffer
-			uint64 BufferSize = 64 * 1024 * 1024;
-			ID3D12Resource* Buffer = nullptr;
-			uint8* BufferCPUAddr = nullptr;
+			uint64 BufferSize = 64 * 1024 * 1024;	// buffer的总大小
+			ID3D12Resource* Buffer = nullptr;	// buffer主体
+			uint8* BufferCPUAddr = nullptr;	// buffer的CPU地址
 
 			// For using the UPLOAD buffer as a ring buffer
 			uint64 BufferStart = 0;
@@ -150,6 +150,8 @@ namespace SampleFramework12
 
 			void Init(UploadQueue* queue)
 			{
+				// 一个UploadRingBuffer（上传环形缓冲）包含了若干个UploadSubmission（上传子任务）
+				// 每个UploadSubmission包含了一个CommandAllocator和一个CommandList
 				Assert_(queue != nullptr);
 				submitQueue = queue;
 
@@ -176,6 +178,7 @@ namespace SampleFramework12
 
 			void Resize(uint64 newBufferSize)
 			{
+				// 释放掉原来的并分配一个新的
 				Release(Buffer);
 
 				BufferSize = newBufferSize;
@@ -193,15 +196,19 @@ namespace SampleFramework12
 				resourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 				resourceDesc.Alignment = 0;
 
+				// 创建一个上传堆Buffer
 				DXCall(Device->CreateCommittedResource(DX12::GetUploadHeapProps(), D3D12_HEAP_FLAG_NONE, &resourceDesc,
 					D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&Buffer)));
 
+				// 将上传堆Buffer的GPU地址映射到CPU地址
+				// 其他代码可以通过各种内存操作，直接从cpu端修改Buffer的内容
 				D3D12_RANGE readRange = { };
 				DXCall(Buffer->Map(0, &readRange, reinterpret_cast<void**>(&BufferCPUAddr)));
 			}
 
 			void ClearPendingUploads(uint64 waitCount)
 			{
+				// 清理掉所有等待的submission
 				const uint64 start = SubmissionStart;
 				const uint64 used = SubmissionUsed;
 				for (uint64 i = 0; i < used; ++i)
@@ -211,19 +218,26 @@ namespace SampleFramework12
 					Assert_(submission.Size > 0);
 					Assert_(BufferUsed >= submission.Size);
 
-					// If the submission hasn't been sent to the GPU yet we can't wait for it
+					// 如果一个submission之前GPU用都没用过，不用等待
 					if (submission.FenceValue == uint64(-1))
-						break;
+						break; // 【猜测submission是按照顺序分配的？所以只要碰到一个没用过的，后面的也不用等了？】
 
+					// 从架构上看，submitFence对应了UploadRingBuffer的内置队列的内置Fence
+					// 可以理解成是 UploadRingBuffer 本身的Fence。
 					ID3D12Fence* submitFence = submitQueue->Fence.D3DFence;
 
-					if (i < waitCount)
+					// 这段代码实际不做任何事情(hEvent == NULL) 不知道作者想的啥
+					if (i < waitCount) 
 						submitFence->SetEventOnCompletion(submission.FenceValue, NULL);
 
+					// 检测UploadRingBuffer的Fence的GPU实际值。
+					// 如果该值大于等于submission的FenceValue，说明某个submission已经完成了。
 					if (submitFence->GetCompletedValue() >= submission.FenceValue)
 					{
+						// start+1，used-1
 						SubmissionStart = (SubmissionStart + 1) % MaxSubmissions;
 						SubmissionUsed -= 1;
+
 						BufferStart = (BufferStart + submission.Padding) % BufferSize;
 						Assert_(submission.Offset == BufferStart);
 						Assert_(BufferStart + submission.Size <= BufferSize);
@@ -240,6 +254,9 @@ namespace SampleFramework12
 						// the ring buffer logic above will move the tail position forward (we don't
 						// allow holes in the ring buffer). Submitting out-of-order should still be
 						// ok though as long as we retire in-order.
+						// 翻译成中文：
+						// 我们不希望提交的submission的释放顺序与分配顺序不一致，因为ring buffer的逻辑会将尾部位置向前移动（我们不允许ring buffer中有空洞）。
+						// 但是，只要我们按顺序释放，提交的顺序不一致应该还是可以的。
 						break;
 					}
 				}
@@ -268,31 +285,40 @@ namespace SampleFramework12
 
 			UploadSubmission* AllocSubmission(uint64 size)
 			{
+				// 分配一个submission
 				Assert_(SubmissionUsed <= MaxSubmissions);
 				if (SubmissionUsed == MaxSubmissions)
 					return nullptr;
 
+				// 要分配的索引编号为 start + used
+				// 【目前还不太确定，推测：在每次gpu队列完成时，start+1，used-1；在每次分配时，used+1】
 				const uint64 submissionIdx = (SubmissionStart + SubmissionUsed) % MaxSubmissions;
 				Assert_(Submissions[submissionIdx].Size == 0);
 
+				// size = 分配的大小
 				Assert_(BufferUsed <= BufferSize);
 				if (size > (BufferSize - BufferUsed))
 					return nullptr;
 
+				// 本次在buffer上分配的内存段，为start~end
 				const uint64 start = BufferStart;
 				const uint64 end = BufferStart + BufferUsed;
 				uint64 allocOffset = uint64(-1);
-				uint64 padding = 0;
-				if (end < BufferSize)
+				uint64 padding = 0; // 在本次分配末端空间不足时，使用padding记录末端剩余的空间大小。
+
+				if (end < BufferSize) // 如果end还在buffer范围内
 				{
-					const uint64 endAmt = BufferSize - end;
+					const uint64 endAmt = BufferSize - end; // end到buffer末尾的距离
 					if (endAmt >= size)
 					{
+						// case 1：如果end到buffer末尾的距离足够大，就直接分配在end处
+						// allocOffset 代表本次分配的起始位置
 						allocOffset = end;
 					}
 					else if (start >= size)
 					{
-						// Wrap around to the beginning
+						// case 2：如果end到buffer末尾的距离不够，但是start到end的距离足够大，就分配在start处
+						// allocOffset 代表本次分配的起始位置
 						allocOffset = 0;
 						BufferUsed += endAmt;
 						padding = endAmt;
@@ -300,6 +326,8 @@ namespace SampleFramework12
 				}
 				else
 				{
+					// 如果end已经超出buffer范围，则需要在start处留出超出的空间【估计上一次分配在了这些地方，要不然叫ringbuffer呢】
+					// allocOffset 代表本次分配的起始位置
 					const uint64 wrappedEnd = end % BufferSize;
 					if ((start - wrappedEnd) >= size)
 						allocOffset = wrappedEnd;
@@ -308,14 +336,16 @@ namespace SampleFramework12
 				if (allocOffset == uint64(-1))
 					return nullptr;
 
+				// 结论：分配1个submission，使用ringbuffer中长度为size的内存
 				SubmissionUsed += 1;
 				BufferUsed += size;
 
+				// 记录本次分配的submission信息
 				UploadSubmission* submission = &Submissions[submissionIdx];
-				submission->Offset = allocOffset;
-				submission->Size = size;
-				submission->FenceValue = uint64(-1);
-				submission->Padding = padding;
+				submission->Offset = allocOffset; // 在ringbuffer中的起始位置
+				submission->Size = size; // ringbuffer中分配的大小
+				submission->FenceValue = uint64(-1); 
+				submission->Padding = padding; // 记录在ringbuffer中分配的大小不足时，剩余的空间大小
 
 				return submission;
 			}
@@ -325,9 +355,10 @@ namespace SampleFramework12
 				Assert_(Device != nullptr);
 
 				Assert_(size > 0);
-				size = AlignTo(size, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
+				size = AlignTo(size, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT); // 512字节对齐
 
-				if (size > BufferSize)
+				// 如果要分配的内存大于buffer的总大小，就将buffer中待执行的任务全部做完，然后将buffer扩大
+				if (size > BufferSize) 
 				{
 					// Resize the ring buffer so that it's big enough
 					AcquireSRWLockExclusive(&Lock);
@@ -345,11 +376,14 @@ namespace SampleFramework12
 				{
 					AcquireSRWLockExclusive(&Lock);
 
+					// 【清空？】
 					ClearPendingUploads(0);
 
+					// 在buffer上分配一个占size大小内存的submission
 					submission = AllocSubmission(size);
 					while (submission == nullptr)
 					{
+						// 如果分配不成功，【清空？】，然后持续尝试分配，直到成功为止
 						ClearPendingUploads(1);
 						submission = AllocSubmission(size);
 					}
@@ -357,9 +391,12 @@ namespace SampleFramework12
 					ReleaseSRWLockExclusive(&Lock);
 				}
 
+				// 启动submission的命令列表、命令分配器
 				DXCall(submission->CmdAllocator->Reset());
 				DXCall(submission->CmdList->Reset(submission->CmdAllocator, nullptr));
 
+				// 创建一个Upload上下文
+				// 记录submission的状态：使用了哪个CmdList、在UploadRingBuffer中的起始位置和指针、Buffer本体和自己的指针
 				UploadContext context;
 				context.CmdList = submission->CmdList;
 				context.Resource = Buffer;
@@ -376,10 +413,12 @@ namespace SampleFramework12
 				Assert_(context.Submission != nullptr);
 				UploadSubmission* submission = reinterpret_cast<UploadSubmission*>(context.Submission);
 
+				// 当submission【完成？】时，关闭并提交命令列表
 				// Kick off the copy command
 				DXCall(submission->CmdList->Close());
 				submission->FenceValue = submitQueue->SubmitCmdList(submission->CmdList, syncOnDependentQueue);
 
+				// 还原状态（不确定是否必要）
 				context = UploadContext();
 			}
 		};
@@ -537,11 +576,15 @@ namespace SampleFramework12
 
 		UploadContext ResourceUploadBegin(uint64 size)
 		{
+			// 目前有两个地方调用：1. Buffer初始化的时候；2. 纹理加载和上传的时候
+			// 开始时调用
 			return uploadRingBuffer.Begin(size);
 		}
 
 		void ResourceUploadEnd(UploadContext& context, bool syncOnGraphicsQueue)
 		{
+			// 目前有两个地方调用：1. Buffer初始化的时候；2. 纹理加载和上传的时候
+			// 结束时调用
 			uploadRingBuffer.End(context, syncOnGraphicsQueue);
 		}
 

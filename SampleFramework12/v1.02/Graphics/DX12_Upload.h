@@ -22,13 +22,14 @@ namespace SampleFramework12
 		ID3D12Resource* Resource = nullptr;
 	};
 
+	// 记录Upload的上下文
 	struct UploadContext
 	{
-		ID3D12GraphicsCommandList* CmdList;
-		void* CPUAddress = nullptr;
-		uint64 ResourceOffset = 0;
-		ID3D12Resource* Resource = nullptr;
-		void* Submission = nullptr;
+		ID3D12GraphicsCommandList* CmdList; // 使用哪个submission中的列表
+		void* CPUAddress = nullptr; // submission在UploadRingBuffer中的指针
+		uint64 ResourceOffset = 0; // submission在UploadRingBuffer的偏移量
+		ID3D12Resource* Resource = nullptr; // 依赖的UploadRingBuffer
+		void* Submission = nullptr; // submission本体的指针
 	};
 
 	namespace DX12
