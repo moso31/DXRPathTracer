@@ -23,6 +23,7 @@ namespace SampleFramework12
 	};
 
 	// 记录Upload的上下文
+	// 执行一次上下文相当于一次资源的上传操作
 	struct UploadContext
 	{
 		ID3D12GraphicsCommandList* CmdList; // 使用哪个submission中的列表

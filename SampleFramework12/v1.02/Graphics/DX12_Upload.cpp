@@ -352,6 +352,9 @@ namespace SampleFramework12
 
 			UploadContext Begin(uint64 size)
 			{
+				// 注：这个方法不是每帧触发；每次有上传资源变更的时候才会触发（比如调参数、换纹理等）
+				// 每次调用这个方法，都会分配一个submission
+
 				Assert_(Device != nullptr);
 
 				Assert_(size > 0);
@@ -376,14 +379,15 @@ namespace SampleFramework12
 				{
 					AcquireSRWLockExclusive(&Lock);
 
-					// 【清空？】
+					// 清空所有待执行的submission
 					ClearPendingUploads(0);
 
 					// 在buffer上分配一个占size大小内存的submission
 					submission = AllocSubmission(size);
 					while (submission == nullptr)
 					{
-						// 如果分配不成功，【清空？】，然后持续尝试分配，直到成功为止
+						// 如果分配不成功，清空待执行submission，
+						// 然后持续尝试分配，直到成功为止
 						ClearPendingUploads(1);
 						submission = AllocSubmission(size);
 					}
@@ -585,6 +589,7 @@ namespace SampleFramework12
 		{
 			// 目前有两个地方调用：1. Buffer初始化的时候；2. 纹理加载和上传的时候
 			// 结束时调用
+			// Begin和End之间，只有一件事：往上传堆写数据
 			uploadRingBuffer.End(context, syncOnGraphicsQueue);
 		}
 
