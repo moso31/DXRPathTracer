@@ -15,6 +15,25 @@
 
 namespace SampleFramework12
 {
+	/*
+		常规上传系统分为下面几个模块
+
+		UploadQueue：			上传队列（命令队列）
+		UploadSubmission(x16)：	单个【子任务块】（命令列表、命令分配器）
+		UploadRingBuffer：		环形缓冲区，是最根本的内存结构。整个上传流程其实就是不断的往Buffer里面读写数据。
+								每一次读写数据都使用一个【子任务块】存储本次将会读写Buffer的哪段。
+		UploadContext：			上传上下文，负责直接对接底层DXAPI。记录依赖哪个子任务（命令分配器、命令列表）、在Buffer中的偏移量是多少。
+
+		在最上层，每次调用任务的时候，会调用Begin()/End()。（比如，我想传一个纹理到GPU上）
+		每次上传资源时，会调用Begin()，先把手头所有等待的子任务处理完，然后再开始新的任务。
+			具体来说，会判断UploadQueue GPU上的Fence是否 大于 子任务的FenceValue
+			如果大于，说明子任务已经完成，可以在Buffer上释放对应的内存区域了
+		然后启动子任务的【命令列表、命令分配器】，并创建一个上下文
+		通过上下文调用DXAPI，将initdata拷贝到上下文的Buffer上，然后又从Buffer拷贝到texture上。
+			Buffer相当于一个中介，拿了数据又传出去。
+		传输完成时，调用End()
+			UploadQueue提交刚才的【命令列表】，并且记录命令队列的FenceValue到子任务上。
+	*/
 
 	namespace DX12
 	{
@@ -417,7 +436,7 @@ namespace SampleFramework12
 				Assert_(context.Submission != nullptr);
 				UploadSubmission* submission = reinterpret_cast<UploadSubmission*>(context.Submission);
 
-				// 当submission【完成？】时，关闭并提交命令列表
+				// 当submission完成时，关闭并提交命令列表
 				// Kick off the copy command
 				DXCall(submission->CmdList->Close());
 				submission->FenceValue = submitQueue->SubmitCmdList(submission->CmdList, syncOnDependentQueue);
@@ -425,7 +444,7 @@ namespace SampleFramework12
 				// 还原状态（不确定是否必要）
 				context = UploadContext();
 			}
-		};
+		}; 
 
 		static UploadQueue uploadQueue;
 		static UploadRingBuffer uploadRingBuffer;
@@ -449,6 +468,10 @@ namespace SampleFramework12
 
 		struct FastUploader
 		{
+			// 使用1个命令列表和n个命令分配器（n=交换链缓冲数）
+			// 逻辑相对简单，每帧可能有若干个需要FastUpload的行为，
+			// 此时通过QueueUpload()方法，将这些行为存储在Uploads[]中。
+			// 每帧结束时，通过SubmitPending()方法，将Uploads[]中的行为提交到GPU上，并通过索引置零的方法清空Uploads[]（不产生实际内存释放）
 			ID3D12GraphicsCommandList5* CmdList = nullptr;
 			ID3D12CommandAllocator* CmdAllocators[RenderLatency] = { };
 			uint64 CmdAllocatorIdx = 0;
@@ -459,6 +482,8 @@ namespace SampleFramework12
 
 			void Init()
 			{
+				// 初始化的时候，初始化1个命令列表和n个命令分配器
+				// 并将命令列表绑定到0号命令分配器上
 				CmdAllocatorIdx = 0;
 
 				for (uint32 i = 0; i < RenderLatency; ++i)
@@ -480,6 +505,7 @@ namespace SampleFramework12
 				Release(CmdList);
 			}
 
+			// 调用这个方法的时候，会存储一个FastUpload
 			void QueueUpload(FastUpload upload)
 			{
 				const int64 idx = InterlockedIncrement64(&NumUploads) - 1;
@@ -489,12 +515,15 @@ namespace SampleFramework12
 
 			void SubmitPending(UploadQueue& queue)
 			{
+				// 每帧结束的时候出发，职责是提交所有的FastUpload
 				if (NumUploads == 0)
 					return;
 
+				// 获取当前帧的命令分配器，并重置命令列表，让命令列表绑定到【当前帧的命令分配器】上
 				CmdAllocators[CmdAllocatorIdx]->Reset();
 				CmdList->Reset(CmdAllocators[CmdAllocatorIdx], nullptr);
 
+				// 读取所有Uploads的数据，并将所有内存段拷贝到DstBuffer上
 				for (int64 uploadIdx = 0; uploadIdx < NumUploads; ++uploadIdx)
 				{
 					const FastUpload& upload = Uploads[uploadIdx];
@@ -503,6 +532,7 @@ namespace SampleFramework12
 
 				CmdList->Close();
 
+				// 然后提交命令列表
 				queue.SubmitCmdList(CmdList, true);
 
 				NumUploads = 0;
@@ -515,12 +545,14 @@ namespace SampleFramework12
 
 		void Initialize_Upload()
 		{
+			// 准备上传相关的一套逻辑
 			uploadQueue.Init(L"Upload Queue");
 			uploadRingBuffer.Init(&uploadQueue);
 
 			fastUploadQueue.Init(L"Fast Upload Queue");
 			fastUploader.Init();
 
+			// 临时内存
 			// Temporary buffer memory that swaps every frame
 			D3D12_RESOURCE_DESC resourceDesc = { };
 			resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
@@ -535,6 +567,10 @@ namespace SampleFramework12
 			resourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 			resourceDesc.Alignment = 0;
 
+			// 创建两个CommittedResource，每帧交替使用
+			// 并将CPU和GPU地址记录下来。
+			// 【猜想：当创建一个资源的时候，会自动在CPU和GPU都分配内存。】
+			// 【只要像下面的代码这样，使用的是上传堆，那么这两个内存地址都可以通过下面的形式（TempFrameCPUMem、TempFrameGPUMem）随时拿到，并且还可以在CPU端修改】
 			for (uint64 i = 0; i < RenderLatency; ++i)
 			{
 				DXCall(Device->CreateCommittedResource(DX12::GetUploadHeapProps(), D3D12_HEAP_FLAG_NONE, &resourceDesc,
@@ -559,11 +595,15 @@ namespace SampleFramework12
 
 		void EndFrame_Upload()
 		{
+			// 每帧结束时：
+			// 清空所有的upload，并让一个独立的【快速上传队列（fastUploadQueue）】提交这些upload。
 			// Kick off any queued "fast" uploads
 			fastUploader.SubmitPending(fastUploadQueue);
 
+			// 清空【环形缓冲】所有等待的submission（推测是保险操作。实际上每次上传任务完成时 本身就会清除所有等待的submission）
 			uploadRingBuffer.TryClearPending();
 
+			// 【主渲染队列】立刻进入等待状态，并在【所有上传任务完成】之前持续等待。
 			// Make sure that the graphics queue waits for any pending uploads that have been submitted.
 			uploadQueue.SyncDependentQueue(GfxQueue);
 			fastUploadQueue.SyncDependentQueue(GfxQueue);
@@ -595,6 +635,8 @@ namespace SampleFramework12
 
 		MapResult AcquireTempBufferMem(uint64 size, uint64 alignment)
 		{
+			// 申请一块临时Buffer内存
+			// 使用【TempFrameUsed】记录本帧内，本次分配，的内存偏移量（TempFrameUsed会在帧末清零）
 			uint64 allocSize = size + alignment;
 			uint64 offset = InterlockedAdd64(&TempFrameUsed, allocSize) - allocSize;
 			if (alignment > 0)
