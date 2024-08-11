@@ -79,26 +79,26 @@ void DescriptorHeap::Shutdown()
 
 PersistentDescriptorAlloc DescriptorHeap::AllocatePersistent()
 {
-    // 分配连续区域的内存
+    // 分配持续区域的内存。
+    // 首先读取死亡列表中的索引，取出一个未使用的索引
+    // 然后在该索引上分配内存
     Assert_(Heaps[0] != nullptr);
 
-    // 锁。Acquire - Release 之间的代码是原子操作
     AcquireSRWLockExclusive(&Lock);
 
-    // 1. 从死亡列表中取出一个索引...
     Assert_(PersistentAllocated < NumPersistent);
     uint32 idx = DeadList[PersistentAllocated];
     ++PersistentAllocated;
 
     ReleaseSRWLockExclusive(&Lock);
     
-    // 2. ...并在该索引上分配内存
+    // PersistentDescriptorAlloc记录了单次分配的信息
     PersistentDescriptorAlloc alloc;
-    alloc.Index = idx;
+    alloc.Index = idx; // idx = 本次分配的具体索引
     for(uint32 i = 0; i < NumHeaps; ++i)
     {
-        alloc.Handles[i] = CPUStart[i];
-        alloc.Handles[i].ptr += idx * DescriptorSize;
+        alloc.Handles[i] = CPUStart[i]; // 先获取本次分配的堆首地址
+        alloc.Handles[i].ptr += idx * DescriptorSize; // 然后根据索引，计算出本次分配的具体地址
     }
 
     return alloc;
@@ -148,35 +148,32 @@ void DescriptorHeap::FreePersistent(D3D12_GPU_DESCRIPTOR_HANDLE& handle)
 
 TempDescriptorAlloc DescriptorHeap::AllocateTemporary(uint32 count)
 {
-    // 分配临时区域的内存
     Assert_(Heaps[0] != nullptr);
     Assert_(count > 0);
 
-    // 原子操作，获取临时内存的索引
-    // 本质相当于 
-    //  {
-    //      tempIdx = TemporaryAllocated; 
-    //      TemporaryAllocated += count;
-    //  }
+    // 原子操作，获取本次分配的索引tempIdx
     uint32 tempIdx = uint32(InterlockedAdd64(&TemporaryAllocated, count)) - count;
     Assert_(tempIdx < NumTemporary);
 
-    // 连续区域内存最大数量+tempIdx = 当前索引
+    // 在内存结构上，先分配持续内存，再分配临时内存
+    // 所以，本次分配总索引 = 持续内存的size + tempIdx
     uint32 finalIdx = tempIdx + NumPersistent;
 
-    // 临时内存的职责是，存储当前帧使用的ShaderVisible的Heap的CPUHandle和GPUHandle
+    // 存储本次分配的临时内存的【CPU描述符】和【GPU描述符】位置。
+    // 注意，【临时内存】只在当前帧（HeapIndex）对应的堆分配，不像【持续内存】那样，两个堆同时都分配
     TempDescriptorAlloc alloc;
     alloc.StartCPUHandle = CPUStart[HeapIndex];
     alloc.StartCPUHandle.ptr += finalIdx * DescriptorSize;
     alloc.StartGPUHandle = GPUStart[HeapIndex];
     alloc.StartGPUHandle.ptr += finalIdx * DescriptorSize;
-    alloc.StartIndex = finalIdx;
+    alloc.StartIndex = finalIdx; // 记录总索引，方便后续寻址
 
     return alloc;
 }
 
 void DescriptorHeap::EndFrame()
 {
+    // 【临时内存】的部分是用完即弃，每帧结束的时候会将索引自动置零。
     Assert_(Heaps[0] != nullptr);
     TemporaryAllocated = 0;
     HeapIndex = (HeapIndex + 1) % NumHeaps;

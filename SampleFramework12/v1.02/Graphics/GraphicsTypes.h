@@ -41,6 +41,7 @@ namespace SampleFramework12
 
 	// 此类对DX12描述符堆做了包装
 	// 支持持久和临时分配的D3D12描述符堆
+	// 分为两个部分：【持续内存区】和【临时内存区】
 	struct DescriptorHeap
 	{
 		ID3D12DescriptorHeap* Heaps[DX12::RenderLatency] = { };
@@ -80,25 +81,25 @@ namespace SampleFramework12
 		void Init(uint32 numPersistent, uint32 numTemporary, D3D12_DESCRIPTOR_HEAP_TYPE heapType, bool shaderVisible);
 		void Shutdown();
 
-		// 分配内存和释放内存
-		// 允许基于索引释放，也允许基于单个CPU/GPU描述符寻址释放
+		// 分配和释放【持续区域的】内存
 		PersistentDescriptorAlloc AllocatePersistent();
 		void FreePersistent(uint32& idx);
 		void FreePersistent(D3D12_CPU_DESCRIPTOR_HANDLE& handle);
 		void FreePersistent(D3D12_GPU_DESCRIPTOR_HANDLE& handle);
 
+		// 分配和释放【临时区域的】内存
 		TempDescriptorAlloc AllocateTemporary(uint32 count);
-		void EndFrame();
+		void EndFrame(); // 【临时内存】的部分是用完即弃，每帧结束的时候会将索引自动置零。而置零就是在这个方法做的
 
+		// 各种寻址方法
 		D3D12_CPU_DESCRIPTOR_HANDLE CPUHandleFromIndex(uint32 descriptorIdx) const;
 		D3D12_GPU_DESCRIPTOR_HANDLE GPUHandleFromIndex(uint32 descriptorIdx) const;
-
 		D3D12_CPU_DESCRIPTOR_HANDLE CPUHandleFromIndex(uint32 descriptorIdx, uint64 heapIdx) const;
 		D3D12_GPU_DESCRIPTOR_HANDLE GPUHandleFromIndex(uint32 descriptorIdx, uint64 heapIdx) const;
-
 		uint32 IndexFromHandle(D3D12_CPU_DESCRIPTOR_HANDLE handle);
 		uint32 IndexFromHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle);
 
+		// 获取当前帧的描述符堆（每帧交替切换）
 		ID3D12DescriptorHeap* CurrentHeap() const;
 		uint32 TotalNumDescriptors() const { return NumPersistent + NumTemporary; }
 	};
