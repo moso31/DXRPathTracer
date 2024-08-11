@@ -1,36 +1,88 @@
-![Path-traced image](https://github.com/TheRealMJP/DXRPathTracer/blob/master/DXRPathTracer.png)
+# 代码梳理
 
-# DXR Path Tracer
-This project is a very basic unidirectional path tracer that I wrote using DirectX Raytracing, also known as DXR. I mostly did this to learn the DXR API, and also for a bit of fun. Therefore you shouldn't take this as an example of the best or most performant way to implement a path tracer on the GPU: I mostly did whatever was fastest and/or easiest to implement! However it could be useful for other people looking for samples that are bit more complex than what's currently offered in the [offical DirectX sample repo](https://github.com/Microsoft/DirectX-Graphics-Samples), or for people who want to start hacking on something and don't want to do all of the boring work themselves. Either way, have fun!
+![NJNW9NT37J)9SUDQHQTPG5F](https://github.com/user-attachments/assets/faa9aac3-de80-439c-b226-fa640a3d1cdb)
 
-# Ray Tracing Gems 2
+## 上传系统
 
-This repository was used as an example for my chapter "Using Bindless Resources With DirectX Raytracing" from [Ray Tracing Gems 2](http://www.realtimerendering.com/raytracinggems/rtg2/). Since then, this repository has been updated to use the newer-style `ResourceDescriptorHeap` from [Shader Model 6.6](https://microsoft.github.io/DirectX-Specs/d3d/HLSL_ShaderModel6_6.html) in order to implement bindless resources. If you would like to view the code that uses the legacy bindless style described in that chapter, head over to the [legacy_bindless branch](https://github.com/TheRealMJP/DXRPathTracer/tree/legacy_bindless).
+上传系统分成两个部分：常规上传系统 和 快速上传系统
 
-# Build Instructions
+### 常规上传系统
 
-The repository contains a Visual Studio 2022 project and solution file that's ready to build on Windows 10 or Windows 11 using SDK 10.0.19041.0 or later. All external dependencies are included in the repository (including a recent build of dxcompiler.dll), so there's no need to download additional libraries. Running the demo requires Windows 10 build 1909 or later (or Windows 11), as well as a GPU/driver combination that supports `D3D12_RAYTRACING_TIER_1_1` and Shader Model 6.6. 
+常规上传系统分为以下几个模块：
 
-The repository does *not* include textures for the Sponza and SunTemple scenes in order to avoid comitting lots of large binary files. To get the textures, download them from [this release](https://github.com/TheRealMJP/DXRPathTracer/releases/tag/v1.0).
+| 模块名称                | 描述                                           |
+| ----------------------- | ---------------------------------------------- |
+| **UploadQueue**         | 上传队列（命令队列）                           |
+| **UploadSubmission(x16)** | 单个【子任务块】（命令列表、命令分配器）         |
+| **UploadRingBuffer**    | 环形缓冲区，是最根本的内存结构。整个上传流程就是不断往Buffer中读写数据。每次读写数据都使用一个【子任务块】存储本次将会读写Buffer的哪段。 |
+| **UploadContext**       | 上传上下文，负责直接对接底层DXAPI。记录依赖哪个子任务（命令分配器、命令列表），以及在Buffer中的偏移量。 |
 
-# Using The App
 
-To move the camera, press the W/S/A/D/Q/E keys. The camera can also be rotated by right-clicking on the window and dragging the mouse.
+#### 执行流程
 
-The render is progressively updated by shooting one ray per-pixel every frame, which takes anywhere from 14 to 30ms per frame on my RTX 2080 when the max path length is set to 3 (the default). Diffuse and specular sampling is currently supported, with lighting provided by a [procedural sun and sky model](http://cgg.mff.cuni.cz/projects/SkylightModelling/). If you change a setting or move the camera, the render will reset and start accumulating samples again. Path lengths greater than 2 are computed by recursively tracing a new ray inside of the closest hit program, which is convenient but probably not the fastest way to things.
+- 在最上层，每次调用任务的时候，会调用Begin()/End()。（比如，我想传一个纹理到GPU上）
+- 每次上传资源时，会调用Begin()，先把手头所有等待的子任务处理完，然后再开始新的任务。
+    - 具体来说，会判断UploadQueue GPU上的Fence是否 大于 子任务的FenceValue
+    - 如果大于，说明子任务已经完成，可以在Buffer上释放对应的内存区域了
+- 然后启动子任务的【命令列表、命令分配器】，并创建一个上下文
+- 通过上下文调用DXAPI，将initdata拷贝到上下文的Buffer上，然后又从Buffer拷贝到texture上。
+    - Buffer相当于一个中介，拿了数据又传出去。
+- 传输完成时，调用End()，进行实际的命令队列提交。
+    - UploadQueue提交刚才的【命令列表】，并且记录命令队列的FenceValue到子任务上。
 
-To improve the quality, increase the "Sqrt Num Samples" setting. As the name implies it's the square root of the number of samples, so increasing that value will increase the total render time non-linearly! You can also increase the maximum path length, which is capped at 3 (single-bounce) by default.
+总体大致是这样的一个流程：
 
-To switch between path-traced rendering and standard (boring) rasterization with no GI, toggle the "Enable Ray Tracing" setting.
+![GWE{GPYN1P5 SNHW0Q JQ{Y](https://github.com/user-attachments/assets/252dbaac-c480-49ac-92c2-1e3047c88c27)
 
-# Possible To-Do List
+## 描述符堆
 
-* ~~Support alpha-tested triangles for foliage~~
-* ~~Investigate performance tradeoffs involved with having one D3D12_RAYTRACING_GEOMETRY_DESC per mesh in the source scene~~
-* Investigate higher-performance sampling schemes (currently using a stock implementation of [Correlated Multi-Jittered Sampling](https://graphics.pixar.com/library/MultiJitteredSampling/paper.pdf))
-* ~~Local light sources~~
-* Area light sampling with soft shadows
-* Non-opaque materials
-* ~~Progress bar/text for the progressive render~~
-* Mip level selection using ray differentials
-* ~~Shader Model 6.6 bindless using ResourceDescriptorHeap~~
+分为了两个部分：持续内存和临时内存。
+
+不同的堆size是不一样的：
+- SRV堆的大小就给了4096持续+4096临时，并且是ShaderVisibleHeap。
+- 而其他类型的堆（RTV/DSV/UAV）只给了256持续，没有临时，也不是ShaderVisibleHeap
+
+如果是ShaderVisible（SRV），则分配两个堆，依赖帧缓冲交替使用；否则（RTV DSV UAV）只需分配一个堆。
+
+在内存分布上，无论两个堆还是一个堆的情况，统一先按照持续内存的大小，布局持续内存；然后紧接着的临时内存大小的区段表示临时内存。
+
+好的，我们来完善这个内存分配与释放的过程。
+
+### 持续内存
+
+持续内存使用一个DeadList记录目前仍然可用的索引。
+
+#### 持续内存-DeadList
+
+默认初始化如下：
+
+```C++
+    DeadList.Init(numPersistent);
+    for(uint32 i = 0; i < numPersistent; ++i)
+        DeadList[i] = uint32(i);
+```
+
+说白了就是初始化成下面这样一个表
+|DeadList索引|0|1|2|3|4|5|6|7|8|...|
+|-|-|-|-|-|-|-|-|-|-|-|
+|实际值|0|1|2|3|4|5|6|7|8|...|
+
+使用一个默认=0的常量记录DeadList的最新可用索引。每次分配内存的时候，将DeadList上对应的内存划掉。
+
+每次释放指定索引的时候，将索引还给DeadList，并放在DeadList的最前面。
+
+#### 持续内存-分配
+
+每次分配内存的时候 使用PersistentDescriptorAlloc记录
+
+- 本次分配的实际地址
+
+注意，如果是SRV堆，由于是ShaderVisibleHeap，会给两个堆都分配内存。
+
+### 临时内存
+
+临时分配内存和持续分配内存有些不太一样的点。包括：
+
+- 分配的时候，会分配到持续内存的最大值（SRV=4096, RTV/UAV/DSV=256）后面。
+- 即使是SRV ShaderVisibleHeap，每次也**只会给当前帧**的堆分配内存
+- 每帧结束时，临时分配的内存会**全部清零**。
