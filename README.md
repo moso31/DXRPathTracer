@@ -38,6 +38,10 @@ Buffer相当于一个中介，拿了数据又传出去。
 
 UploadQueue提交刚才的【命令列表】，并且记录命令队列的FenceValue到子任务上。
 
+总体大致是这样的一个流程：
+
+![GWE{GPYN1P5 SNHW0Q JQ{Y](https://github.com/user-attachments/assets/252dbaac-c480-49ac-92c2-1e3047c88c27)
+
 ## 描述符堆
 
 分为了两个部分：持续内存和临时内存。
@@ -48,4 +52,45 @@ UploadQueue提交刚才的【命令列表】，并且记录命令队列的FenceV
 
 如果是ShaderVisible（SRV），则分配两个堆，依赖帧缓冲交替使用；否则（RTV DSV UAV）只需分配一个堆。
 
+在内存分布上，无论两个堆还是一个堆的情况，统一先按照持续内存的大小，布局持续内存；然后紧接着的临时内存大小的区段表示临时内存。
+
+好的，我们来完善这个内存分配与释放的过程。
+
 ### 持续内存
+
+持续内存使用一个DeadList记录目前仍然可用的索引。
+
+#### 持续内存-DeadList
+
+默认初始化如下：
+
+```C++
+    DeadList.Init(numPersistent);
+    for(uint32 i = 0; i < numPersistent; ++i)
+        DeadList[i] = uint32(i);
+```
+
+说白了就是初始化成下面这样一个表
+|DeadList索引|0|1|2|3|4|5|6|7|8|...|
+|-|-|-|-|-|-|-|-|-|-|-|
+|实际值|0|1|2|3|4|5|6|7|8|...|
+
+使用一个默认=0的常量记录DeadList的最新可用索引。每次分配内存的时候，将DeadList上对应的内存划掉。
+
+每次释放指定索引的时候，将索引还给DeadList，并放在DeadList的最前面。
+
+#### 持续内存-分配
+
+每次分配内存的时候 使用PersistentDescriptorAlloc记录
+
+- 本次分配的实际地址
+
+注意，如果是SRV堆，由于是ShaderVisibleHeap，会给两个堆都分配内存。
+
+### 临时内存
+
+临时分配内存和持续分配内存有些不太一样的点。包括：
+
+- 分配的时候，会分配到持续内存的最大值（SRV=4096, RTV/UAV/DSV=256）后面。
+- 即使是SRV ShaderVisibleHeap，每次也**只会给当前帧**的堆分配内存
+- 每帧结束时，临时分配的内存会**全部清零**。
