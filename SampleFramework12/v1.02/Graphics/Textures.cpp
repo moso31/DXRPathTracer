@@ -81,11 +81,15 @@ void LoadTexture(Texture& texture, const wchar* filePath, bool forceSRGB)
     textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     textureDesc.Alignment = 0;
 
+    // 创建资源本体 for 纹理
     ID3D12Device* device = DX12::Device;
     DXCall(device->CreateCommittedResource(DX12::GetDefaultHeapProps(), D3D12_HEAP_FLAG_NONE, &textureDesc,
                                            D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&texture.Resource)));
     texture.Resource->SetName(filePath);
 
+    // 在srv堆上，分配一个新的srv描述符
+    // 注意texture.SRV记录的是【在描述符堆上的索引】，而不是描述符本身。
+    // （对SRV类型描述符堆，见其Init方法，最大长度可达4096。所以不用担心DeadList溢出的问题）
     PersistentDescriptorAlloc srvAlloc = DX12::SRVDescriptorHeap.AllocatePersistent();
     texture.SRV = srvAlloc.Index;
 
@@ -102,21 +106,31 @@ void LoadTexture(Texture& texture, const wchar* filePath, bool forceSRGB)
         srvDescPtr = &srvDesc;
     }
 
+    // 将描述符绑定到该纹理上
+    // 注意描述符堆（NumHeaps）有2个。【后续渲染时关注下怎么分帧使用的】
     for(uint32 i = 0; i < DX12::SRVDescriptorHeap.NumHeaps; ++i)
         device->CreateShaderResourceView(texture.Resource, srvDescPtr, srvAlloc.Handles[i]);
 
+    // 准备资源数据以复制到GPU上。
+    // 首先计算子资源的数量
     const uint64 numSubResources = metaData.mipLevels * metaData.arraySize;
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT* layouts = (D3D12_PLACED_SUBRESOURCE_FOOTPRINT*)_alloca(sizeof(D3D12_PLACED_SUBRESOURCE_FOOTPRINT) * numSubResources);
     uint32* numRows = (uint32*)_alloca(sizeof(uint32) * numSubResources);
     uint64* rowSizes = (uint64*)_alloca(sizeof(uint64) * numSubResources);
 
+    // 调用GetCopyableFootprints来获取每个子资源的布局信息
     uint64 textureMemSize = 0;
     device->GetCopyableFootprints(&textureDesc, 0, uint32(numSubResources), 0, layouts, numRows, rowSizes, &textureMemSize);
 
+    // 上传系统开始执行：
+    // 1. 清空之前的子任务
+    // 2. 分配新的子任务（本次纹理的加载）
     // Get a GPU upload buffer
     UploadContext uploadContext = DX12::ResourceUploadBegin(textureMemSize);
     uint8* uploadMem = reinterpret_cast<uint8*>(uploadContext.CPUAddress);
 
+    // 3. 开始执行实际上传堆copy。
+    // 因为使用了上传堆，所以在CPU段修改uploadMem，GPU段就会自动同步更新。
     for(uint64 arrayIdx = 0; arrayIdx < metaData.arraySize; ++arrayIdx)
     {
 
@@ -146,6 +160,8 @@ void LoadTexture(Texture& texture, const wchar* filePath, bool forceSRGB)
         }
     }
 
+    // 4. memcpy完成以后，调用CopyTextureRegion来将数据从上传堆拷贝到本次创建的纹理资源上。
+    // 上传堆的数据会在后续变成不可见，所以不需要手动释放。
     for(uint64 subResourceIdx = 0; subResourceIdx < numSubResources; ++subResourceIdx)
     {
         D3D12_TEXTURE_COPY_LOCATION dst = { };
@@ -160,8 +176,10 @@ void LoadTexture(Texture& texture, const wchar* filePath, bool forceSRGB)
         uploadContext.CmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
     }
 
+    // 5. 提交上传任务
     DX12::ResourceUploadEnd(uploadContext);
 
+    // 更新纹理基本数据
     texture.Width = uint32(metaData.width);
     texture.Height = uint32(metaData.height);
     texture.Depth = uint32(metaData.depth);

@@ -78,12 +78,18 @@ static Float4x4 ConvertMatrix(const aiMatrix4x4& mat)
 void LoadMaterialResources(Array<MeshMaterial>& materials, const wstring& directory, bool32 forceSRGB,
                            GrowableList<MaterialTexture*>& materialTextures)
 {
+    // 加载材质依赖的资源。
+    // materials: 材质列表
+    // directory: 资源目录
+    // forceSRGB: 是否强制使用sRGB纹理
+    // materialTextures: 纹理列表
     const uint64 numMaterials = materials.Size();
     for(uint64 matIdx = 0; matIdx < numMaterials; ++matIdx)
     {
         MeshMaterial& material = materials[matIdx];
         for(uint64 texType = 0; texType < uint64(MaterialTextures::Count); ++texType)
         {
+            // 1. 遍历所有材质的所有纹理
             material.Textures[texType] = nullptr;
 
             wstring path = directory + material.TextureNames[texType];
@@ -107,6 +113,7 @@ void LoadMaterialResources(Array<MeshMaterial>& materials, const wstring& direct
                 }
             }
 
+            // 2. 如果该纹理还没有加载，则加载它
             if(material.Textures[texType] == nullptr)
             {
                 MaterialTexture* newMatTexture = new MaterialTexture();
@@ -622,6 +629,7 @@ void Model::GenerateBoxScene(const Float3& dimensions, const Float3& position,
 
 void Model::GenerateBoxTestScene()
 {
+    // 生成一个材质，该材质仅依赖Albedo和Normal
     meshMaterials.Init(1);
     MeshMaterial& material = meshMaterials[0];
     material.TextureNames[uint64(MaterialTextures::Albedo)] = L"White.png";
@@ -631,13 +639,16 @@ void Model::GenerateBoxTestScene()
 
     indexType = IndexType::Index16Bit;
 
+    // 顶点、索引数组分配内存
     vertices.Init(NumBoxVerts * 2);
     indices.Init(NumBoxIndices * 2 * sizeof(uint16));
 
+    // mesh数组分配内存，然后填充顶点数据
     meshes.Init(2);
     meshes[0].InitBox(Float3(2.0f), Float3(0.0f, 1.5f, 0.0f), Quaternion(), 0, vertices.Data(), (uint16*)indices.Data());
     meshes[1].InitBox(Float3(10.0f, 0.25f, 10.0f), Float3(0.0f), Quaternion(), 0, &vertices[NumBoxVerts], (uint16*)&indices[NumBoxIndices * sizeof(uint16)]);
 
+    // 创建实际buffer for 顶点&索引
     CreateBuffers();
 }
 

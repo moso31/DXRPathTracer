@@ -208,11 +208,14 @@ void DXRPathTracer::Initialize()
         AppSettings::ClusterRasterizationMode.ClampNumValues(uint32(ClusterRasterizationModes::NumValues) - 1);
     }
 
+    // 1. 初始化相机
     float aspect = float(swapChain.Width()) / swapChain.Height();
     camera.Initialize(aspect, Pi_4, 0.1f, 100.0f);
 
+    // 2. 初始化阴影相关
     ShadowHelper::Initialize(ShadowMapMode::DepthMap, ShadowMSAAMode::MSAA1x);
 
+    // 初始化基本场景
     InitializeScene();
 
     skybox.Initialize();
@@ -596,6 +599,7 @@ void DXRPathTracer::CreateRenderTargets()
 
 void DXRPathTracer::InitializeScene()
 {
+    // 加载场景，默认是2号场景（BoxTest）
     const uint64 currSceneIdx = uint64(AppSettings::CurrentScene);
     AppSettings::EnableWhiteFurnaceMode.SetValue(currSceneIdx == uint64(Scenes::WhiteFurnace));
 
@@ -604,6 +608,7 @@ void DXRPathTracer::InitializeScene()
     {
         if(currSceneIdx == uint64(Scenes::BoxTest) || ScenePaths[currSceneIdx] == nullptr)
         {
+            // BoxTest场景，需要程序化生成
             sceneModels[currSceneIdx].GenerateBoxTestScene();
         }
         else

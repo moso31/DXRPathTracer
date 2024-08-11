@@ -48,16 +48,20 @@ void Profiler::Initialize()
 
     enableGPUProfiling = true;
 
+    // 构建一个query heap
     D3D12_QUERY_HEAP_DESC heapDesc = { };
-    heapDesc.Count = MaxProfiles * 2;
+    heapDesc.Count = MaxProfiles * 2; // 查询数量限制为128(=64*2)
     heapDesc.NodeMask = 0;
-    heapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    heapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP; // 时间戳。所以这个类型的query heap可以用来记录GPU的各种操作时长。
     DX12::Device->CreateQueryHeap(&heapDesc, IID_PPV_ARGS(&queryHeap));
 
-    readbackBuffer.Initialize(MaxProfiles * DX12::RenderLatency * 2 * sizeof(uint64));
+    // 初始化了一个回读堆资源
+    readbackBuffer.Initialize(MaxProfiles * DX12::RenderLatency * 2 * sizeof(uint64)); // 字节大小为 64*2*2*8=3072
     readbackBuffer.Resource->SetName(L"Query Readback Buffer");
 
-    profiles.Init(MaxProfiles);
+    // 对profiles和cpuProfiles进行初始化
+    // 都是长度为64(MaxProfiles)的数组
+    profiles.Init(MaxProfiles); 
     cpuProfiles.Init(MaxProfiles);
 }
 

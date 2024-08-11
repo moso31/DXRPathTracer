@@ -173,20 +173,22 @@ void App::Initialize_Internal()
     DX12::Initialize(minFeatureLevel, adapterIdx);
 
     window.SetClientArea(swapChain.Width(), swapChain.Height());
-    swapChain.Initialize(window);
+    swapChain.Initialize(window); // 初始化交换链，缓冲数量=2
 
     if(showWindow)
         window.ShowWindow();
 
     // Create a font + SpriteRenderer
+    // 创建一个字体+Sprite渲染器
     font.Initialize(L"Consolas", 18, SpriteFont::Regular, true);
     spriteRenderer.Initialize();
 
+    // 初始化profiler
     Profiler::GlobalProfiler.Initialize();
 
     window.RegisterMessageCallback(OnWindowResized, this);
 
-    // Initialize ImGui
+    // 初始化 ImGui
     ImGuiHelper::Initialize(window);
 
     AppSettings::Initialize();
