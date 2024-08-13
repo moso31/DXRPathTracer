@@ -715,11 +715,12 @@ void Model::CreateBuffers()
 {
     Assert_(meshes.Size() > 0);
 
+    // 顶点Buffer
     StructuredBufferInit sbInit;
     sbInit.Stride = sizeof(MeshVertex);
     sbInit.NumElements = vertices.Size();;
     sbInit.InitData = vertices.Data();
-    vertexBuffer.Initialize(sbInit);
+    vertexBuffer.Initialize(sbInit); // 初始化顶点Buffer
 
     const uint32 indexSize = IndexSize();
 

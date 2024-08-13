@@ -162,6 +162,8 @@ namespace SampleFramework12
 			uint64 BufferUsed = 0;
 
 			// Thread safety
+			// 暂时不是很清楚这个锁的作用，目前所见的这个类的所有方法都是在主线程中调用的
+			// 可能只是作者想展示一下可以做线程安全？
 			SRWLOCK Lock = SRWLOCK_INIT;
 
 			// The queue for submitting on

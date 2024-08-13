@@ -350,6 +350,9 @@ namespace SampleFramework12
 			if (resource == nullptr)
 				return;
 
+			// 如果是CPU和GPU在同一帧【用什么表示在同一帧？Fence么】，并且不是强制延迟释放
+			// 或者处于其他"可以立刻释放的状态"（比如正在关闭、设备为空）
+			// 就释放资源。
 			if ((CurrentCPUFrame == CurrentGPUFrame && forceDeferred == false) || ShuttingDown || Device == nullptr)
 			{
 				// Free-for-all!
@@ -357,6 +360,7 @@ namespace SampleFramework12
 				return;
 			}
 
+			// 否则将资源加入延迟释放队列，等待合适的时机释放。
 			DeferredReleases[CurrFrameIdx].Add(resource);
 		}
 

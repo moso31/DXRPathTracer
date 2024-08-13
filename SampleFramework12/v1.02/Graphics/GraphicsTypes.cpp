@@ -249,6 +249,13 @@ void Buffer::Initialize(uint64 size, uint64 alignment, bool32 dynamic, bool32 cp
                         bool32 allowUAV, const void* initData, D3D12_RESOURCE_STATES initialState,
                         ID3D12Heap* heap, uint64 heapOffset, const wchar* name)
 {
+    // 这个方法主要做以下几件事：
+    // 1.   创建一个Buffer。如果是dynamic类型的，两份内存；否则只需一份内存。
+    // 1+.  通过是否显式传入heap堆指针，判断是创建【PlacedResource】，还是【CommittedResource】。
+    //      以顶点为例，创建
+    // 2.   获取GPU虚拟地址、构建CPU虚拟地址
+    // 3.   如果有initData并且cpu可访问，那直接把initdata拷贝到实际Resource上
+    // 4.   如果有initData但CPU不可访问，那么需要用上传系统，拷贝数据到实际Resource上
     Assert_(size > 0);
     Assert_(alignment > 0);
 
@@ -266,6 +273,9 @@ void Buffer::Initialize(uint64 size, uint64 alignment, bool32 dynamic, bool32 cp
     Assert_(allowUAV == false || dynamic == false);
     Assert_(dynamic || cpuAccessible == false);
 
+    // 1. 创建一个Buffer。如果是dynamic类型的，两份内存；否则只需一份内存。
+    // 如果是cpu可访问的，放在上传堆上；否则放在默认堆上。
+    // 【感觉确实是将底层的逻辑都暴露出来了啊，DX11只需要给个cpuAccess就行了哪需要关注这么多事情】
     D3D12_RESOURCE_DESC resourceDesc = { };
     resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
     resourceDesc.Width = dynamic ? Size * DX12::RenderLatency : Size;
@@ -286,6 +296,7 @@ void Buffer::Initialize(uint64 size, uint64 alignment, bool32 dynamic, bool32 cp
     else if(initData)
         resourceState = D3D12_RESOURCE_STATE_COMMON;
 
+    // 1+. 如果预设了堆，则创建PlacedResource；否则创建常规CommittedResource
     if(heap)
     {
         Heap = heap;
@@ -302,6 +313,7 @@ void Buffer::Initialize(uint64 size, uint64 alignment, bool32 dynamic, bool32 cp
     if(name)
         Resource->SetName(name);
 
+    // 获取GPU虚拟地址、构建CPU虚拟地址
     GPUAddress = Resource->GetGPUVirtualAddress();
 
     if(cpuAccessible)
@@ -312,6 +324,7 @@ void Buffer::Initialize(uint64 size, uint64 alignment, bool32 dynamic, bool32 cp
 
     if(initData && cpuAccessible)
     {
+        // 如果有initData并且cpu可访问，那直接把initdata拷贝到实际Resource上
         for(uint64 i = 0; i < DX12::RenderLatency; ++i)
         {
             uint8* dstMem = CPUAddress + Size * i;
@@ -319,16 +332,23 @@ void Buffer::Initialize(uint64 size, uint64 alignment, bool32 dynamic, bool32 cp
         }
 
     }
-    else if(initData)
+    else if(initData) 
     {
+        // 如果有initData但CPU不可访问，
+        // 则需要用上传系统，拷贝数据到实际Resource上
         UploadContext uploadContext = DX12::ResourceUploadBegin(resourceDesc.Width);
 
+        // 在上传堆的拷贝行为，理论上是立刻发生同步行为
+        // 映射到了 UploadRingBuffer 上，所以【memcpy实际修改的是 UploadRingBuffer 映射的内存/显存】
         memcpy(uploadContext.CPUAddress, initData, size);
         if(dynamic)
             memcpy((uint8*)uploadContext.CPUAddress + size, initData, size);
 
+        // 最后将UploadRingBuffer中的对应段数据拷贝到【实际使用的Resource】上
         uploadContext.CmdList->CopyBufferRegion(Resource, 0, uploadContext.Resource, uploadContext.ResourceOffset, size);
 
+        // 提交命令队列。
+        // 所以实际的Resource数据变更是延迟的（等待对应【命令队列】执行完），而不是立即的。
         DX12::ResourceUploadEnd(uploadContext);
     }
 }
@@ -504,10 +524,11 @@ void StructuredBuffer::Initialize(const StructuredBufferInit& init)
         Assert_(init.Stride % D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT == 0);
     }
 
-    Stride = init.Stride;
-    NumElements = init.NumElements;
-    IsShaderTable = init.ShaderTable;
+    Stride = init.Stride; // 单个顶点的大小
+    NumElements = init.NumElements; // 顶点数量
+    IsShaderTable = init.ShaderTable; // 【？这玩意好像是给光追准备的……先不管】
 
+    // 创建一个Buffer。StructuredBuffer本质上仍是对Buffer的包装。
     InternalBuffer.Initialize(Stride * NumElements, Stride, init.Dynamic, init.CPUAccessible, init.CreateUAV,
                               init.InitData, init.InitialState, init.Heap, init.HeapOffset, init.Name);
     GPUAddress = InternalBuffer.GPUAddress;

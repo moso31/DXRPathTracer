@@ -104,16 +104,23 @@ namespace SampleFramework12
 		uint32 TotalNumDescriptors() const { return NumPersistent + NumTemporary; }
 	};
 
+	// 单个Buffer资源
 	struct Buffer
 	{
-		ID3D12Resource* Resource = nullptr;
+		ID3D12Resource* Resource = nullptr; // Buffer资源本体
 		uint64 CurrBuffer = 0;
+
+		// CPU/GPU地址
 		uint8* CPUAddress = 0;
 		uint64 GPUAddress = 0;
+
 		uint64 Alignment = 0;
 		uint64 Size = 0;
-		bool32 Dynamic = false;
+
+		// 类似DX11：是否动态资源，是否CPU可访问
+		bool32 Dynamic = false; 
 		bool32 CPUAccessible = false;
+
 		ID3D12Heap* Heap = nullptr;
 		uint64 HeapOffset = 0;
 		uint64 UploadFrame = uint64(-1);
