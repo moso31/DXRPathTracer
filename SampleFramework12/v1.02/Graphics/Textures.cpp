@@ -61,6 +61,14 @@ void LoadTexture(Texture& texture, const wchar* filePath, bool forceSRGB)
         DXCall(DirectX::GenerateMipMaps(*tempImage.GetImage(0, 0, 0), DirectX::TEX_FILTER_DEFAULT, 0, image, false));
     }
 
+    // 创建一张纹理，步骤如下：
+    // 1. 创建一个资源本体，CommittedResource，使用默认堆。
+    // 2. 在SRV堆上，分配指向此资源的SRV（描述符）
+    // 3. 准备资源数据。
+    // 4. 调用上传系统（清空之前的所有子任务，并添加这次的新子任务）
+    // 5. 通过memcpy更改上传堆的临时数据；然后通过CopyTextureRegion将上传堆的结果拷贝到默认堆上。
+    // 6. 提交上传系统给DXAPI。
+
     const DirectX::TexMetadata& metaData = image.GetMetadata();
     DXGI_FORMAT format = metaData.format;
     if(forceSRGB)
@@ -130,7 +138,7 @@ void LoadTexture(Texture& texture, const wchar* filePath, bool forceSRGB)
     uint8* uploadMem = reinterpret_cast<uint8*>(uploadContext.CPUAddress);
 
     // 3. 开始执行实际上传堆copy。
-    // 因为使用了上传堆，所以在CPU段修改uploadMem，GPU段就会自动同步更新。
+    // 因为使用了上传堆，所以在CPU段修改uploadMem，相当于修改了上传堆的资源。
     for(uint64 arrayIdx = 0; arrayIdx < metaData.arraySize; ++arrayIdx)
     {
 
@@ -160,7 +168,7 @@ void LoadTexture(Texture& texture, const wchar* filePath, bool forceSRGB)
         }
     }
 
-    // 4. memcpy完成以后，调用CopyTextureRegion来将数据从上传堆拷贝到本次创建的纹理资源上。
+    // 4. 上传堆memcpy完成以后，调用CopyTextureRegion来将数据从上传堆【uploadContext.Resource】拷贝到本次创建的【默认堆】纹理资源【texture.Resource】上。
     // 上传堆的数据会在后续变成不可见，所以不需要手动释放。
     for(uint64 subResourceIdx = 0; subResourceIdx < numSubResources; ++subResourceIdx)
     {

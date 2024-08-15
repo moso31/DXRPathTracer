@@ -33,7 +33,7 @@ uint32 CBVDescriptorSize = 0;
 uint32 DSVDescriptorSize = 0;
 
 DescriptorHeap RTVDescriptorHeap;
-DescriptorHeap SRVDescriptorHeap;
+DescriptorHeap SRVDescriptorHeap; // 【这里的SRV很可能也包括CBV，只是没有显式标明？】
 DescriptorHeap DSVDescriptorHeap;
 DescriptorHeap UAVDescriptorHeap;
 

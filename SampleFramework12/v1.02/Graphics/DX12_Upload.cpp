@@ -132,7 +132,7 @@ namespace SampleFramework12
 			ID3D12GraphicsCommandList5* CmdList = nullptr;
 			uint64 Offset = 0;
 			uint64 Size = 0;
-			uint64 FenceValue = 0;
+			uint64 FenceValue = 0; // 【SubMission永远只是从UploadQueue拿值，不会主动定义？】
 			uint64 Padding = 0;
 
 			void Reset()
@@ -605,7 +605,7 @@ namespace SampleFramework12
 			// 清空【环形缓冲】所有等待的submission（推测是保险操作。实际上每次上传任务完成时 本身就会清除所有等待的submission）
 			uploadRingBuffer.TryClearPending();
 
-			// 【主渲染队列】立刻进入等待状态，并在【所有上传任务完成】之前持续等待。
+			// 要求【主渲染队列 GfxQueue】立刻进入等待状态，并在【所有上传任务完成】之前持续等待。
 			// Make sure that the graphics queue waits for any pending uploads that have been submitted.
 			uploadQueue.SyncDependentQueue(GfxQueue);
 			fastUploadQueue.SyncDependentQueue(GfxQueue);

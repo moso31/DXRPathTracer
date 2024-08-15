@@ -99,6 +99,9 @@ PersistentDescriptorAlloc DescriptorHeap::AllocatePersistent()
     {
         alloc.Handles[i] = CPUStart[i]; // 先获取本次分配的堆首地址
         alloc.Handles[i].ptr += idx * DescriptorSize; // 然后根据索引，计算出本次分配的具体地址
+
+        // 注意这里的alloc.Handles[i] 只是分配了内存，并没有指定实际的描述符
+        // DXAPI方法CreateShaderResourceView才能创建实际的描述符（创建时需要提供这个Handle作为地址）
     }
 
     return alloc;
@@ -252,7 +255,7 @@ void Buffer::Initialize(uint64 size, uint64 alignment, bool32 dynamic, bool32 cp
     // 这个方法主要做以下几件事：
     // 1.   创建一个Buffer。如果是dynamic类型的，两份内存；否则只需一份内存。
     // 1+.  通过是否显式传入heap堆指针，判断是创建【PlacedResource】，还是【CommittedResource】。
-    //      以顶点为例，创建
+    //      以顶点为例，创建CommittedResource。
     // 2.   获取GPU虚拟地址、构建CPU虚拟地址
     // 3.   如果有initData并且cpu可访问，那直接把initdata拷贝到实际Resource上
     // 4.   如果有initData但CPU不可访问，那么需要用上传系统，拷贝数据到实际Resource上
@@ -515,6 +518,8 @@ StructuredBuffer::~StructuredBuffer()
 
 void StructuredBuffer::Initialize(const StructuredBufferInit& init)
 {
+    // 此方法用于创建 顶点Buffer
+
     Shutdown();
 
     Assert_(init.Stride > 0);
@@ -531,16 +536,23 @@ void StructuredBuffer::Initialize(const StructuredBufferInit& init)
     // 创建一个Buffer。StructuredBuffer本质上仍是对Buffer的包装。
     InternalBuffer.Initialize(Stride * NumElements, Stride, init.Dynamic, init.CPUAccessible, init.CreateUAV,
                               init.InitData, init.InitialState, init.Heap, init.HeapOffset, init.Name);
-    GPUAddress = InternalBuffer.GPUAddress;
+    GPUAddress = InternalBuffer.GPUAddress; // 记录GPU映射地址
 
+    // 在SRV堆的连续内存区域分配一个描述符
     PersistentDescriptorAlloc srvAlloc = DX12::SRVDescriptorHeap.AllocatePersistent();
     SRV = srvAlloc.Index;
 
     // Start off all SRV's pointing to the first buffer
+    // 创建SRV，并将SRV存储在srvAlloc.Handles对应的位置
+    //（即，DX12::SRVDescriptorHeap描述符堆上对应的位置）
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = SRVDesc(0);
-    for(uint32 i = 0; i < ArraySize_(srvAlloc.Handles); ++i)
+    for (uint32 i = 0; i < ArraySize_(srvAlloc.Handles); ++i)
+    {
+        // 因为SRV堆是ShaderVisible的，所以需要创建(ArraySize=)2次
         DX12::Device->CreateShaderResourceView(InternalBuffer.Resource, &srvDesc, srvAlloc.Handles[i]);
+    }
 
+    // TODO：创建UAV才会使用，现在暂时搁置
     if(init.CreateUAV)
     {
         Assert_(init.Dynamic == false);
@@ -727,26 +739,34 @@ FormattedBuffer::~FormattedBuffer()
 
 void FormattedBuffer::Initialize(const FormattedBufferInit& init)
 {
+    // 此方法用于创建 索引Buffer
+
     Shutdown();
 
     Assert_(init.Format != DXGI_FORMAT_UNKNOWN);
     Assert_(init.NumElements > 0);
-    Stride = DirectX::BitsPerPixel(init.Format) / 8;
+    // 直接依赖DXGIFORMAT确定单个元素的大小（Stride）
+    // 作为对比，顶点需要显式提供Stride的大小。
+    Stride = DirectX::BitsPerPixel(init.Format) / 8; 
     NumElements = init.NumElements;
     Format = init.Format;
 
+    // 创建Buffer本体
     InternalBuffer.Initialize(Stride * NumElements, Stride, init.Dynamic, init.CPUAccessible, init.CreateUAV,
                               init.InitData, init.InitialState, init.Heap, init.HeapOffset, init.Name);
-    GPUAddress = InternalBuffer.GPUAddress;
+    GPUAddress = InternalBuffer.GPUAddress; // 记录GPU地址映射
 
+    // 在SRV堆上分配内存空间
     PersistentDescriptorAlloc srvAlloc = DX12::SRVDescriptorHeap.AllocatePersistent();
     SRV = srvAlloc.Index;
 
-// Start off all SRV's pointing to the first buffer
+    // Start off all SRV's pointing to the first buffer
+    // 为该资源创建一个SRV
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = SRVDesc(0);
     for(uint32 i = 0; i < ArraySize_(srvAlloc.Handles); ++i)
         DX12::Device->CreateShaderResourceView(InternalBuffer.Resource, &srvDesc, srvAlloc.Handles[i]);
 
+    // TODO。
     if(init.CreateUAV)
     {
         Assert_(init.Dynamic == false);
