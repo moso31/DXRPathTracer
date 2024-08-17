@@ -129,8 +129,10 @@ void MeshRenderer::Initialize(const Model* model_)
         boundingBox.Extents = extents.ToXMFLOAT3();
     }
 
+    // 编译shader
     LoadShaders();
 
+    // 创建两张Buffer，一个是主光的阴影图；一个是聚光灯的阴影图
     {
         DepthBufferInit dbInit;
         dbInit.Width = SunShadowMapSize;
@@ -157,6 +159,7 @@ void MeshRenderer::Initialize(const Model* model_)
 
     {
         // Create a structured buffer containing texture indices per-material
+        // 创建一个材质Buffer，该Buffer包含每个材质的纹理的SRV的索引
         const Array<MeshMaterial>& materials = model->Materials();
         const uint64 numMaterials = materials.Size();
         Array<Material> matBufferData(numMaterials);
@@ -185,6 +188,14 @@ void MeshRenderer::Initialize(const Model* model_)
         materialBuffer.Resource()->SetName(L"Material Texture Indices");
     }
 
+    // 这里的作用应该是约定了一些固定pass的参数的槽位。
+    // 首先描述符表放在了第一个槽位【直觉推测里面只有SRV UAV等？】
+    // 然后所有CBuffer统一使用 space0. VS和PS都放在 slot0（它们的shader_visibility不同，所以没问题）
+    // shadowCBuffer，放在了slot1
+    // MatIndexCBuffer，放在了slot2
+    // LightCBuffer，放在了slot3
+    // SRVIndices，放在了slot4
+    // AppSettings，放在了slot12
     {
         // Main pass root signature
         D3D12_ROOT_PARAMETER1 rootParameters[NumMainPassRootParams] = {};
@@ -259,6 +270,8 @@ void MeshRenderer::Initialize(const Model* model_)
         DX12::CreateRootSignature(&mainPassRootSignature, rootSignatureDesc);
     }
 
+    // 和上面的类似，这里约定了只依赖深度的根描述符
+    // 这里简单一些，只有一个VSCBuffer，放在了slot0, space0.
     {
         // Depth only root signature
         D3D12_ROOT_PARAMETER1 rootParameters[1] = {};

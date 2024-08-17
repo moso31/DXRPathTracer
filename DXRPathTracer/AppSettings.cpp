@@ -126,7 +126,7 @@ namespace AppSettings
         ClusterRasterizationMode.Initialize("ClusterRasterizationMode", "Rendering", "Cluster Rasterization Mode", "Conservative rasterization mode to use for light binning", ClusterRasterizationModes::Conservative, 4, ClusterRasterizationModesLabels);
         Settings.AddSetting(&ClusterRasterizationMode);
 
-        EnableRayTracing.Initialize("EnableRayTracing", "Path Tracing", "Enable Ray Tracing", "", true);
+        EnableRayTracing.Initialize("EnableRayTracing", "Path Tracing", "Enable Ray Tracing", "", false);
         Settings.AddSetting(&EnableRayTracing);
 
         ClampRoughness.Initialize("ClampRoughness", "Path Tracing", "Clamp Roughness", "Clamp roughness for caustic paths from glossy bounces. Based on 'Physically Based Shader Design in Arnold' [Langlands14]", false);

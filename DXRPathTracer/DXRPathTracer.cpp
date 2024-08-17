@@ -215,13 +215,19 @@ void DXRPathTracer::Initialize()
     // 2. 初始化阴影相关
     ShadowHelper::Initialize(ShadowMapMode::DepthMap, ShadowMSAAMode::MSAA1x);
 
-    // 初始化基本场景
+    // 3. 初始化基本场景
     InitializeScene();
 
+    // 4. 初始化天空盒
     skybox.Initialize();
 
+    // 5. 初始化后处理
     postProcessor.Initialize();
 
+    // 【7. 从这里再往下，都是一些类似的初始化，没有特别新的东西了，跳过返回吧】
+
+    // 6. 初始化聚光灯相关
+    // 没看过聚光灯Cluster……【感觉应该是准备了一堆圆锥的数据，然后GPUInstance渲染，根据屏幕上的像素点，判断这个像素点是否在圆锥内部，如果在就打Spot光？】
     {
         // Spot light bounds and instance buffers
         StructuredBufferInit sbInit;
@@ -506,7 +512,9 @@ void DXRPathTracer::CreateRenderTargets()
     uint32 height = swapChain.Height();
     const uint32 NumSamples = AppSettings::NumMSAASamples();
 
-     {
+    // 创建主渲染目标RT，深度缓冲DSV，以及计算结果RT
+    // 【？还有一些其他不知道干啥用的RT，先略】
+	{
         RenderTextureInit rtInit;
         rtInit.Width = width;
         rtInit.Height = height;
@@ -633,6 +641,7 @@ void DXRPathTracer::InitializeScene()
     camera.SetYRotation(SceneCameraRotations[currSceneIdx].y);
     AppSettings::SunDirection.SetValue(SceneSunDirections[currSceneIdx]);
 
+    // 初始化一组探照灯的数据。
     {
         // Initialize the spotlight data used for rendering
         const uint64 numSpotLights = Min(currentModel->SpotLights().Size(), AppSettings::MaxSpotLights);

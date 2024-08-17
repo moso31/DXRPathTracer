@@ -516,8 +516,10 @@ namespace SampleFramework12
 		const wchar* Name = nullptr;
 	};
 
+	// 深度图Buffer
 	struct DepthBuffer
 	{
+		// 纹理本体
 		Texture Texture;
 		D3D12_CPU_DESCRIPTOR_HANDLE DSV = { };
 		D3D12_CPU_DESCRIPTOR_HANDLE ReadOnlyDSV = { };

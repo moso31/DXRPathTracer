@@ -1142,6 +1142,17 @@ RenderTexture::~RenderTexture()
 
 void RenderTexture::Initialize(const RenderTextureInit& init)
 {
+    // 这里负责初始化一张RT，大概做了以下事情：
+    // 1. 初始化各种纹理描述，资源状态
+    // 2. 在默认堆上创建RT实际资源
+
+    // 3. 在SRV堆上，分配对应的内存并创建SRV。（如果是CubeMap，需要创建一张ArraySize=6的SRV）
+
+    // 4. 在RTV堆上分配内存，然后在该内存上创建RTV
+    // 4+. 如果这张纹理是一个Array，那么需要为每个Array元素创建一个Slice=1的RTV
+
+    // 5. （可选）在UAV堆上分配内存并创建UAV
+
     Shutdown();
 
     Assert_(init.Width > 0);
@@ -1400,6 +1411,11 @@ DepthBuffer::~DepthBuffer()
 
 void DepthBuffer::Initialize(const DepthBufferInit& init)
 {
+    // 大概做了下面的事情：
+    // 0. 初始化格式状态，准备纹理描述
+    // 1. 在默认堆上创建一个纹理资源
+    // 2. 在SRV堆上分配对应的SRV内存，并在分配的内存上创建SRV
+    // 3. 在DSV堆上分配对应的DSV内存，并在分配的内存上创建DSV
     Shutdown();
 
     Assert_(init.Width > 0);
@@ -1428,6 +1444,7 @@ void DepthBuffer::Initialize(const DepthBufferInit& init)
         AssertFail_("Invalid depth buffer format!");
     }
 
+    // 创建纹理本体
     D3D12_RESOURCE_DESC textureDesc = { };
     textureDesc.MipLevels = 1;
     textureDesc.Format = init.Format;
@@ -1446,12 +1463,14 @@ void DepthBuffer::Initialize(const DepthBufferInit& init)
     clearValue.DepthStencil.Stencil = 0;
     clearValue.Format = init.Format;
 
+    // 1. 在默认堆上创建一个纹理资源
     DXCall(DX12::Device->CreateCommittedResource(DX12::GetDefaultHeapProps(), D3D12_HEAP_FLAG_NONE, &textureDesc,
                                                  init.InitialState, &clearValue, IID_PPV_ARGS(&Texture.Resource)));
 
     if(init.Name != nullptr)
         Texture.Resource->SetName(init.Name);
 
+    // 2. 分配对应的SRV内存
     PersistentDescriptorAlloc srvAlloc = DX12::SRVDescriptorHeap.AllocatePersistent();
     Texture.SRV = srvAlloc.Index;
 
@@ -1487,6 +1506,7 @@ void DepthBuffer::Initialize(const DepthBufferInit& init)
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY;
     }
 
+    // 2+. 在2. 分配的内存上创建SRV
     for(uint32 i = 0; i < DX12::SRVDescriptorHeap.NumHeaps; ++i)
         DX12::Device->CreateShaderResourceView(Texture.Resource, &srvDesc, srvAlloc.Handles[i]);
 
@@ -1500,6 +1520,7 @@ void DepthBuffer::Initialize(const DepthBufferInit& init)
     MSAASamples = uint32(init.MSAASamples);
     MSAAQuality = uint32(textureDesc.SampleDesc.Quality);
 
+    // 3. 分配DSV内存
     DSV = DX12::DSVDescriptorHeap.AllocatePersistent().Handles[0];
 
     D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = { };
@@ -1529,16 +1550,19 @@ void DepthBuffer::Initialize(const DepthBufferInit& init)
         dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY;
     }
 
+    // 3+. 在3. 分配的内存上创建DSV
     DX12::Device->CreateDepthStencilView(Texture.Resource, &dsvDesc, DSV);
 
     bool hasStencil = init.Format == DXGI_FORMAT_D24_UNORM_S8_UINT || init.Format == DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
 
+    // 4. 分配一个只读的DSV内存，并在该内存上创建DSV
     ReadOnlyDSV = DX12::DSVDescriptorHeap.AllocatePersistent().Handles[0];
     dsvDesc.Flags = D3D12_DSV_FLAG_READ_ONLY_DEPTH;
     if(hasStencil)
         dsvDesc.Flags |= D3D12_DSV_FLAG_READ_ONLY_STENCIL;
     DX12::Device->CreateDepthStencilView(Texture.Resource, &dsvDesc, ReadOnlyDSV);
 
+    // 如果深度纹理是一个2DArray，则需要创建init.ArraySize个DSV，每个DSV对应一个ArraySlice
     if(init.ArraySize > 1)
     {
         ArrayDSVs.Init(init.ArraySize);
@@ -1547,7 +1571,7 @@ void DepthBuffer::Initialize(const DepthBufferInit& init)
         if(init.MSAASamples > 1)
             dsvDesc.Texture2DMSArray.ArraySize = 1;
         else
-            dsvDesc.Texture2DArray.ArraySize = 1;
+            dsvDesc.Texture2DArray.ArraySize = 1; // 对应一个ArraySlice，所以ArraySize = 1
 
         for(uint64 i = 0; i < init.ArraySize; ++i)
         {

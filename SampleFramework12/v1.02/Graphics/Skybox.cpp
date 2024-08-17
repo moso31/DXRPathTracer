@@ -292,6 +292,8 @@ Skybox::~Skybox()
 
 void Skybox::Initialize()
 {
+    // 编译shader、创建根签名、初始化VBIB
+    
     // Load the shaders
     const std::wstring shaderPath = SampleFrameworkDir() + L"Shaders\\Skybox.hlsl";
     vertexShader = CompileFromFile(shaderPath.c_str(), "SkyboxVS", ShaderType::Vertex);
