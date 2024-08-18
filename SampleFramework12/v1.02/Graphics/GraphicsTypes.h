@@ -163,6 +163,8 @@ namespace SampleFramework12
 
 	struct ConstantBufferInit
 	{
+		// ConstantBuffer 默认动态资源，CPU可写
+		// 没有SRV、UAV
 		uint64 Size = 0;
 		bool32 Dynamic = true;
 		bool32 CPUAccessible = true;
@@ -196,6 +198,7 @@ namespace SampleFramework12
 
 	struct StructuredBufferInit
 	{
+		// StructuredBuffer默认静态资源，CPU不可写。
 		uint64 Stride = 0;
 		uint64 NumElements = 0;
 		bool32 CreateUAV = false;

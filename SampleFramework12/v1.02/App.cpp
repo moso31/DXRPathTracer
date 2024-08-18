@@ -59,14 +59,17 @@ int32 App::Run()
         // 初始化
         Initialize_Internal();
 
+        // 这里设置部分相机参数，但更主要的是创建各种RT。
         AfterReset_Internal();
 
+        // 初始化各种pass的PSO。
         CreatePSOs_Internal();
 
         while(window.IsAlive())
         {
             if(!window.IsMinimized())
             {
+                //【？主要管各种更新，和渲染无关。先略。】
                 Update_Internal();
 
                 Render_Internal();
@@ -239,6 +242,7 @@ void App::Render_Internal()
         CreatePSOs();
     }
 
+    // 更新CBuffer。这里只是做了Map
     AppSettings::UpdateCBuffer();
 
     DX12::BeginFrame();

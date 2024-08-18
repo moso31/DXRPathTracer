@@ -369,8 +369,10 @@ MapResult Buffer::Map()
     Assert_(Dynamic);
     Assert_(CPUAccessible);
 
+    // 动态Buffer有两份内存。根据当前帧，选择其中一份
     const uint64 currOffset = CycleBuffer();
 
+    // 获取当前帧的CPU地址、GPU地址、资源本体指针、偏移量，并返回
     MapResult result;
     result.ResourceOffset = currOffset;
     result.CPUAddress = CPUAddress + currOffset;
@@ -402,14 +404,17 @@ uint64 Buffer::QueueUpload(ID3D12Resource* srcResource, uint64 srcOffset, uint64
 
 uint64 Buffer::CycleBuffer()
 {
+    // 仅限已初始化的动态Buffer使用
     Assert_(Initialized());
     Assert_(Dynamic);
 
     // Make sure that we do this at most once per-frame
+    // 确保每帧最多执行一次
     Assert_(UploadFrame != DX12::CurrentCPUFrame);
     UploadFrame = DX12::CurrentCPUFrame;
 
     // Cycle to the next buffer
+    // 动态Buffer有两份内存。根据当前帧，选择其中一份
     CurrBuffer = (CurrBuffer + 1) % DX12::RenderLatency;
 
     return CurrBuffer * Size;
